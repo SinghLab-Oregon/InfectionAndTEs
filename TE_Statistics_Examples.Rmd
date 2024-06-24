@@ -1,0 +1,251 @@
+---
+title: "TE_Statistics_Examples"
+author: "Sabrina Mostoufi"
+date: "2023-07-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Importing Data, Loading Packages
+
+```{r}
+library(dplyr)
+data <- read.csv("Significant_TEs.csv")
+
+for (i in 1:nrow(data)){
+  if (data$log2FoldChange[i] > 0){
+    data$direction[i] <- "Positive"
+  }
+  else if (data$log2FoldChange[i] < 0){
+    data$direction[i] <- "Negative"
+  }
+}
+sig <- data
+```
+
+## Loading Libraries
+```{r libraries, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(stringr)
+library(tidyverse)
+library(dplyr)
+library(chisq.posthoc.test)
+```
+
+# Testing correlation between sample size, read count, and DETES
+```{r testing sample size and DETE correlation}
+table_samps <- read.csv("/AAA/Table1_Datasets.csv")
+table_samps <- na.exclude(table_samps)
+
+ggplot(data=table_samps, mapping = aes(y=DETEs, x=ReadCount)) + geom_point() + ylab("Number of TE Families") + xlab("Number of significant TEs") +theme_classic() + stat_smooth(method = lm)
+model <- lm(DETEs ~ ReadCount, data = table_samps)
+summary(model)
+```
+
+# GLM Test
+
+```{r}
+model <- glm(data=sig, formula = log2FoldChange ~ Pathogen + Tissue + Genotype + Sex +0, family = gaussian(link = "identity"))
+summary(model)
+```
+
+# Chi Square Analyses
+
+Testing for differences between pathogen groups, also whether proportions of DETEs at class and family levels differ from genome proportions
+
+Proportion of TEs in D.mel genome = 45% LTR, 20% DNA, 21% non-LTR (LINE), 14% Other (Moschetti et al. 2020 Biology)
+
+### Does TE location data reflect this?
+
+```{r load datasets}
+gtf <- read.csv("/Users/sabrinamostoufi/Documents/Experiments/TransposableElementProject/Scripts/dm6_BDGP_rmsk_TE.csv")
+
+for (i in 1:nrow(gtf)){
+  if (gtf$family_id[i]=="Gypsy"){
+    gtf$family_id[i] <- "Ty3"
+  }
+}
+```
+
+```{r class proportions}
+sig_class <- sig %>% count(Class, Pathogen)
+
+class <- as.data.frame(table(gtf$class_id))
+class$Proportion = class$Freq / sum(class$Freq)
+class$Percent = class$Proportion*100
+pval <- class[,c(1,3)]
+print(class)
+
+```
+
+TE data from gtf file is similar, but split into more classes than just DNA, LTR, LINE, and other.
+
+```{r superfamily proportions}
+family <- as.data.frame(table(gtf$family_id))
+family$Proportion = family$Freq / sum(family$Freq)
+family$Percent = family$Proportion*100
+pfam <- family[,c(1,3)]
+print(family)
+```
+
+## ChiSquare: Do TE expression data differ significantly from class & superfamily proportion of TEs in genome?
+
+Using proportions for class and family generated from GTF file. Do we see significantly different observed patterns at the class and superfamily level compared to what we would expect based on genome proportions?
+
+### Example: Bacteria
+
+```{r bacteria class}
+bac <- subset(sig, Pathogen == "Bacteria")
+bc <- as.data.frame(table(bac$Class))
+
+bc <- merge(pval, bc, all=TRUE)
+bc[is.na(bc)] = 0
+
+bac_xsq <- chisq.test(bc$Freq, p=bc$Proportion)
+print(bac_xsq)
+print(cbind.data.frame(bc$Var1, bac_xsq$residuals))
+```
+
+Sig chi square pvalue for class proportions in Bacteria datasets. Residuals \> or \< +/-2 indicates that variable had more/less observations than expected. For bacteria, there were more LINE TEs and less RC than expected.
+
+```{r bacteria family}
+bc2 <- as.data.frame(table(bac$Family))
+
+bc2 <- merge(pfam, bc2, all=TRUE)
+bc2[is.na(bc2)] = 0
+bc2 <- subset(bc2, bc2$Var1 != "Unknown")
+
+bac_xsq2 <- chisq.test(bc2$Freq, p=bc2$Proportion)
+print(bac_xsq2)
+print(cbind.data.frame(bc2$Var1, bac_xsq2$residuals))
+```
+
+Sig chi square pvalue for family proportions in bacterial datasets. However, there is no "Unknown" family in GTF reference, so unclear where the "RR" TEs come from in the TEtranscripts output. For bacteria, the families Copia, Jockey, R1, and R2 saw more observations than expected (residual \>2). There were less observations than expected for Helitron.
+
+Repeat analyses as above for other pathogen groups (fungi, Wolbachia, viruses).
+
+## Do pathogens differ from each other?
+Example chi-square tests for evaluating whether pathogens and host variables resulted in different patterns of classes and superfamilies for DETEs affected by infection.
+
+### Class
+
+```{r wol v others}
+compath <- as.table(cbind((wb[,3]),(fn[,3]),(bc[,3])))
+dimnames(compath) <- list(Class = wb[,1], Pathogen = c("Wolbachia","Fungi", "Bacteria"))
+compath <- compath[-c(1, 5,7,8),]
+cp <- as.data.frame(compath)
+
+compath2 <- compath[,c(1,2)]
+compath3 <- compath[,c(1,3)]
+
+chisq.test(compath2)
+print("Wolb vs fungi")
+chisq.test(compath3)
+print("wolb vs bacteria")
+```
+
+
+```{r fungi vs bacteria}
+compath1 <- compath[,c(3,4)]
+compath1 <- compath1[-c(1,4,5),]
+
+
+chisq.test(compath1)
+print("Bacteria vs fungi")
+```
+
+
+### Family
+
+```{r wol v others}
+#editing to remove viruses
+compath <- as.table(cbind((wb2[,3]),(fn2[,3]),(bc2[,3]))) #(vr2[,3])
+dimnames(compath) <- list(Class = wb2[,1], Pathogen = c("Wolbachia","Fungi", "Bacteria")) #"Virus", 
+compath <- compath[-c(1:4, 7:11,16:18,21,24:26,31),]
+cp <- as.data.frame(compath)
+
+compath1 <- compath[,1:2]
+compath2 <- compath[,c(2,3)]
+compath3 <- compath[,c(1,3)]
+compath3 <- compath3[c(1,2,6,8,9,13),]
+
+chisq.test(compath1)
+#print("Wolb vs virus")
+#chisq.test(compath2)
+print("Wolb vs fungi")
+#chisq.test(compath3)
+#print("fungi vs virus")
+```
+
+
+
+```{r bac v others}
+compath <- as.table(cbind((wb2[,3]),(fn2[,3]),(bc2[,3]))) #(vr2[,3]),
+dimnames(compath) <- list(Class = wb2[,1], Pathogen = c("Wolbachia","Fungi", "Bacteria")) #"Virus", 
+compath <- compath[-c(1:4, 7:11,16:18,21,24:26,31),]
+cp <- as.data.frame(compath)
+
+#compath1 <- compath[,c(1,4)]
+#compath1 <- compath1[-c(3:5,7,11,12,14)]
+compath2 <- compath[,c(1,3)]
+compath3 <- compath[,c(2,3)]
+compath3 <- compath3[c(2,6,8,9,10,13),]
+
+#chisq.test(compath1)
+#print("Bac vs virus")
+chisq.test(compath2)
+print("Bac vs wolbachia")
+chisq.test(compath3)
+print("Bac vs fungi")
+```
+
+## Sex differences?
+
+### Sex Class
+
+```{r sex across all datasets, by class}
+sex <- sig
+sex <- sex %>% group_by(Sex) %>% count(Class)
+adds <- data.frame(Sex = c("Male", "Male"), Class = c("DNA", "RC"), n=c(0,0)) #, "Unknown" , "RC" ,0
+sex <- rbind(sex, adds)
+sex <- sex%>% arrange(Sex,Class)
+sex$n <- as.integer(sex$n)
+a <- subset(sex, Sex=="Male")
+b <- subset(sex, Sex=="Female")
+#c <- subset(sex, Sex=="Unknown")
+
+test_sex <- as.table(cbind(a$n, b$n)) #,c$n
+
+dimnames(test_sex) <- list(Class = a$Class, Sex = c("Male", "Female")) #, "Unknown"
+chisq.test(test_sex)
+chisq.posthoc.test(test_sex)
+print("sex status and class")
+```
+
+
+
+### Sex Superfamily
+
+```{r sex across all datasets, by superfamily}
+sex <- sig
+sex <- sex %>% group_by(Sex) %>% count(Family)
+
+adds <- data.frame(Sex = c("Female","Male","Male","Male","Male","Male"), Family = c("R2","CMC-Transib","Helitron","P","TcMar-Pogo","TcMar-Tc1"), n=c(0,0,0,0,0,0))
+# , "Unknown", "Unknown", "Unknown" , "Helitron","TcMar-Pogo","TcMar-Tc1"
+sex <- rbind(sex, adds)
+sex <- sex%>% arrange(Sex,Family)
+sex$n <- as.integer(sex$n)
+a <- subset(sex, Sex=="Male")
+b <- subset(sex, Sex=="Female")
+#c <- subset(sex, Sex=="Unknown")
+
+test_sex <- as.table(cbind(a$n, b$n)) #,c$n
+
+dimnames(test_sex) <- list(Family = a$Family, Sex = c("Male", "Female")) #, "Unknown"
+chisq.test(test_sex)
+chisq.posthoc.test(test_sex)
+print("sex status and family")
+```
